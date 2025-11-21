@@ -1,0 +1,23 @@
+{
+  "name": "kwork-telegram-bot",
+  "version": "1.0.0",
+  "description": "Telegram bot for Kwork projects monitoring",
+  "main": "api/bot.js",
+  "scripts": {
+    "dev": "vercel dev",
+    "start": "node api/bot.js",
+    "local": "node local.js",
+    "local:monitor": "node local.js --monitor",
+    "local:once": "node local.js --once"
+  },
+  "dependencies": {
+    "telegraf": "^4.16.3",
+    "node-cron": "^3.0.3",
+    "axios": "^1.6.2",
+    "cheerio": "^1.0.0-rc.12",
+    "dotenv": "^16.3.1"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
