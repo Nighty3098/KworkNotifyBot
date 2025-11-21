@@ -5,6 +5,7 @@ const cheerio = require("cheerio");
 // Глобальные переменные для хранения состояния
 let processedProjects = new Set();
 let monitoringInterval = null;
+let isMonitoring = false;
 
 class KworkParser {
   constructor() {
@@ -19,6 +20,7 @@ class KworkParser {
 
   async getProjects() {
     try {
+      console.log("🔍 Запрос к Kwork...");
       const response = await this.axiosInstance.get(
         "https://kwork.ru/projects",
       );
@@ -114,80 +116,8 @@ class KworkParser {
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const kworkParser = new KworkParser();
 
-// Команды бота
-bot.start((ctx) => {
-  ctx.reply(
-    "🚀 Бот для мониторинга Kwork запущен!\n\nКоманды:\n/monitor - запустить мониторинг\n/stop - остановить мониторинг\n/check - проверить сейчас\n/status - статус",
-  );
-});
-
-bot.command("monitor", (ctx) => {
-  if (monitoringInterval) {
-    ctx.reply("🔍 Мониторинг уже запущен!");
-    return;
-  }
-
-  // Запуск мониторинга каждые 2 минуты
-  monitoringInterval = setInterval(async () => {
-    try {
-      const newProjects = await kworkParser.getNewProjects();
-      if (newProjects.length > 0) {
-        console.log(`🎉 Найдено новых проектов: ${newProjects.length}`);
-        for (const project of newProjects) {
-          await sendProjectNotification(ctx, project);
-          // Задержка между отправками
-          await new Promise((resolve) => setTimeout(resolve, 1000));
-        }
-      }
-    } catch (error) {
-      console.error("❌ Ошибка мониторинга:", error);
-    }
-  }, 120000); // 2 минуты
-
-  ctx.reply("🔍 Мониторинг запущен! Проверка каждые 2 минуты.");
-  console.log("✅ Мониторинг запущен");
-});
-
-bot.command("stop", (ctx) => {
-  if (monitoringInterval) {
-    clearInterval(monitoringInterval);
-    monitoringInterval = null;
-    ctx.reply("🛑 Мониторинг остановлен");
-    console.log("🛑 Мониторинг остановлен");
-  } else {
-    ctx.reply("ℹ️ Мониторинг не запущен");
-  }
-});
-
-bot.command("check", async (ctx) => {
-  ctx.reply("🔍 Проверяю новые проекты...");
-
-  try {
-    const newProjects = await kworkParser.getNewProjects();
-    if (newProjects.length > 0) {
-      ctx.reply(`🎉 Найдено новых проектов: ${newProjects.length}`);
-      for (const project of newProjects) {
-        await sendProjectNotification(ctx, project);
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-    } else {
-      ctx.reply("ℹ️ Новых проектов нет");
-    }
-  } catch (error) {
-    ctx.reply("❌ Ошибка при проверке проектов");
-    console.error("❌ Ошибка проверки:", error);
-  }
-});
-
-bot.command("status", (ctx) => {
-  const status = monitoringInterval ? "активен" : "остановлен";
-  ctx.reply(
-    `📊 Статус мониторинга: ${status}\nОбработано проектов: ${processedProjects.size}`,
-  );
-});
-
 // Функция отправки уведомления о проекте
-async function sendProjectNotification(ctx, project) {
+async function sendProjectNotification(chatId, project) {
   try {
     const message = `
 🎯 *НОВЫЙ ПРОЕКТ НА KWORK*
@@ -203,7 +133,7 @@ async function sendProjectNotification(ctx, project) {
 🔗 [Открыть проект](${project.url})
         `.trim();
 
-    await ctx.telegram.sendMessage(ctx.chat.id, message, {
+    await bot.telegram.sendMessage(chatId, message, {
       parse_mode: "Markdown",
       disable_web_page_preview: false,
     });
@@ -213,6 +143,105 @@ async function sendProjectNotification(ctx, project) {
     console.error("❌ Ошибка отправки уведомления:", error);
   }
 }
+
+// Команды бота
+bot.start((ctx) => {
+  ctx.reply(
+    "🚀 Бот для мониторинга Kwork запущен!\n\nКоманды:\n/monitor - запустить мониторинг\n/stop - остановить мониторинг\n/check - проверить сейчас\n/status - статус",
+  );
+});
+
+bot.command("monitor", async (ctx) => {
+  if (isMonitoring) {
+    ctx.reply("🔍 Мониторинг уже запущен!");
+    return;
+  }
+
+  isMonitoring = true;
+  const chatId = ctx.chat.id;
+
+  // Запуск мониторинга каждые 2 минуты
+  monitoringInterval = setInterval(async () => {
+    try {
+      if (!isMonitoring) return;
+
+      console.log("🔍 Автоматическая проверка проектов...");
+      const newProjects = await kworkParser.getNewProjects();
+      if (newProjects.length > 0) {
+        console.log(`🎉 Найдено новых проектов: ${newProjects.length}`);
+        for (const project of newProjects) {
+          await sendProjectNotification(chatId, project);
+          // Задержка между отправками
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+    } catch (error) {
+      console.error("❌ Ошибка мониторинга:", error);
+    }
+  }, 120000); // 2 минуты
+
+  // Первая проверка сразу
+  try {
+    ctx.reply(
+      "🔍 Мониторинг запущен! Проверка каждые 2 минуты. Первая проверка...",
+    );
+    const newProjects = await kworkParser.getNewProjects();
+    if (newProjects.length > 0) {
+      ctx.reply(`🎉 Найдено новых проектов: ${newProjects.length}`);
+      for (const project of newProjects) {
+        await sendProjectNotification(chatId, project);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    } else {
+      ctx.reply("ℹ️ Новых проектов нет");
+    }
+  } catch (error) {
+    ctx.reply("❌ Ошибка при первой проверке");
+    console.error("❌ Ошибка первой проверки:", error);
+  }
+
+  console.log("✅ Мониторинг запущен");
+});
+
+bot.command("stop", (ctx) => {
+  if (monitoringInterval) {
+    clearInterval(monitoringInterval);
+    monitoringInterval = null;
+    isMonitoring = false;
+    ctx.reply("🛑 Мониторинг остановлен");
+    console.log("🛑 Мониторинг остановлен");
+  } else {
+    ctx.reply("ℹ️ Мониторинг не запущен");
+  }
+});
+
+bot.command("check", async (ctx) => {
+  const chatId = ctx.chat.id;
+  ctx.reply("🔍 Проверяю новые проекты...");
+
+  try {
+    const newProjects = await kworkParser.getNewProjects();
+    if (newProjects.length > 0) {
+      ctx.reply(`🎉 Найдено новых проектов: ${newProjects.length}`);
+      for (const project of newProjects) {
+        await sendProjectNotification(chatId, project);
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+    } else {
+      ctx.reply("ℹ️ Новых проектов нет");
+    }
+  } catch (error) {
+    ctx.reply("❌ Ошибка при проверке проектов");
+    console.error("❌ Ошибка проверки:", error);
+  }
+});
+
+bot.command("status", (ctx) => {
+  const status = isMonitoring ? "активен" : "остановлен";
+  ctx.reply(
+    `📊 Статус мониторинга: ${status}\nОбработано проектов: ${processedProjects.size}`,
+  );
+});
 
 // Обработка ошибок бота
 bot.catch((err, ctx) => {
@@ -224,36 +253,37 @@ async function startBot() {
   try {
     // Для Vercel используем вебхуки, для локального - long polling
     if (process.env.VERCEL) {
-      console.log("🚀 Бот запущен в режиме вебхука");
+      console.log("🚀 Бот запущен в режиме вебхука на Vercel");
       // Vercel будет обрабатывать вебхуки через экспортированную функцию
     } else {
       console.log("🚀 Бот запущен в режиме long polling");
       await bot.launch();
 
       // Автозапуск мониторинга при старте в локальном режиме
-      monitoringInterval = setInterval(async () => {
-        try {
-          const newProjects = await kworkParser.getNewProjects();
-          if (newProjects.length > 0) {
-            console.log(`🎉 Найдено новых проектов: ${newProjects.length}`);
-            // В локальном режиме отправляем первому чату (можно настроить)
-            for (const project of newProjects) {
-              // Здесь нужно указать chat_id для локальных уведомлений
-              const chatId = process.env.TELEGRAM_CHAT_ID;
-              if (chatId) {
-                await bot.telegram.sendMessage(
-                  chatId,
-                  `🎯 НОВЫЙ ПРОЕКТ: ${project.title}\n💰 ${project.price}\n🔗 ${project.url}`,
-                  { parse_mode: "Markdown" },
+      if (process.env.TELEGRAM_CHAT_ID) {
+        console.log("🔍 Автозапуск мониторинга в локальном режиме...");
+        isMonitoring = true;
+        monitoringInterval = setInterval(async () => {
+          try {
+            if (!isMonitoring) return;
+
+            console.log("🔍 Автоматическая проверка проектов...");
+            const newProjects = await kworkParser.getNewProjects();
+            if (newProjects.length > 0) {
+              console.log(`🎉 Найдено новых проектов: ${newProjects.length}`);
+              for (const project of newProjects) {
+                await sendProjectNotification(
+                  process.env.TELEGRAM_CHAT_ID,
+                  project,
                 );
                 await new Promise((resolve) => setTimeout(resolve, 1000));
               }
             }
+          } catch (error) {
+            console.error("❌ Ошибка мониторинга:", error);
           }
-        } catch (error) {
-          console.error("❌ Ошибка мониторинга:", error);
-        }
-      }, 120000);
+        }, 120000);
+      }
     }
 
     console.log("✅ Бот успешно запущен");
@@ -277,7 +307,7 @@ module.exports = async (req, res) => {
     // Для GET запросов - информационная страница
     res.status(200).json({
       status: "Bot is running",
-      monitoring: monitoringInterval ? "active" : "inactive",
+      monitoring: isMonitoring ? "active" : "inactive",
       processed_projects: processedProjects.size,
       timestamp: new Date().toISOString(),
     });
