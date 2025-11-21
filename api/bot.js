@@ -9,44 +9,108 @@ let isMonitoring = false;
 
 class KworkParser {
   constructor() {
+    this.retryCount = 3;
+    this.retryDelay = 2000;
+
     this.axiosInstance = axios.create({
-      timeout: 10000,
+      timeout: 30000, // Увеличили таймаут до 30 секунд
       headers: {
         "User-Agent":
-          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+        Accept:
+          "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+        "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
       },
     });
   }
 
   async getProjects() {
-    try {
-      console.log("🔍 Запрос к Kwork...");
-      const response = await this.axiosInstance.get(
-        "https://kwork.ru/projects",
-      );
-      const html = response.data;
+    for (let attempt = 1; attempt <= this.retryCount; attempt++) {
+      try {
+        console.log(
+          `🔍 Запрос к Kwork (попытка ${attempt}/${this.retryCount})...`,
+        );
 
-      const stateDataMatch = html.match(/window\.stateData\s*=\s*({.*?});/s);
+        const response = await this.axiosInstance.get(
+          "https://kwork.ru/projects",
+          {
+            timeout: 30000,
+          },
+        );
 
-      if (stateDataMatch) {
-        try {
-          const stateData = JSON.parse(stateDataMatch[1]);
+        const html = response.data;
 
-          if (stateData.wantsListData && stateData.wantsListData.wants) {
-            const projects = stateData.wantsListData.wants;
-            console.log(`📊 Найдено проектов: ${projects.length}`);
-            return this.parseProjects(projects);
-          }
-        } catch (error) {
-          console.error("❌ Ошибка парсинга JSON:", error);
+        // Ищем данные разными способами
+        const projects = this.extractProjectsFromHtml(html);
+        if (projects && projects.length > 0) {
+          console.log(`📊 Найдено проектов: ${projects.length}`);
+          return projects;
+        }
+
+        // Если проекты не найдены, пробуем еще раз
+        if (attempt < this.retryCount) {
+          console.log(
+            `⏳ Проекты не найдены, повтор через ${this.retryDelay / 1000} сек...`,
+          );
+          await this.delay(this.retryDelay);
+        }
+      } catch (error) {
+        console.error(
+          `❌ Ошибка запроса (попытка ${attempt}/${this.retryCount}):`,
+          error.message,
+        );
+
+        if (attempt < this.retryCount) {
+          console.log(`⏳ Повтор через ${this.retryDelay / 1000} сек...`);
+          await this.delay(this.retryDelay);
+        } else {
+          console.error("❌ Все попытки запроса завершились ошибкой");
         }
       }
-
-      return [];
-    } catch (error) {
-      console.error("❌ Ошибка запроса к Kwork:", error);
-      return [];
     }
+    return [];
+  }
+
+  extractProjectsFromHtml(html) {
+    // Способ 1: Ищем в window.stateData
+    const stateDataMatch = html.match(/window\.stateData\s*=\s*({.*?});/s);
+    if (stateDataMatch) {
+      try {
+        const stateData = JSON.parse(stateDataMatch[1]);
+        if (stateData.wantsListData && stateData.wantsListData.wants) {
+          return this.parseProjects(stateData.wantsListData.wants);
+        }
+      } catch (error) {
+        console.error("❌ Ошибка парсинга stateData:", error.message);
+      }
+    }
+
+    // Способ 2: Ищем в других местах
+    const scriptMatches = html.match(/<script[^>]*>([\s\S]*?)<\/script>/gi);
+    if (scriptMatches) {
+      for (const script of scriptMatches) {
+        if (script.includes("wants") && script.includes("projects")) {
+          try {
+            // Пробуем найти JSON в скрипте
+            const jsonMatch = script.match(/{[\s\S]*"wants"[\s\S]*}/);
+            if (jsonMatch) {
+              const data = JSON.parse(jsonMatch[0]);
+              if (data.wants) {
+                return this.parseProjects(data.wants);
+              }
+            }
+          } catch (error) {
+            // Игнорируем ошибки парсинга
+          }
+        }
+      }
+    }
+
+    return [];
   }
 
   parseProjects(projectsData) {
@@ -55,6 +119,8 @@ class KworkParser {
     for (const project of projectsData) {
       try {
         const projectId = project.id;
+        if (!projectId) continue;
+
         const title = project.name || "Без названия";
 
         let description = project.description || "Без описания";
@@ -84,7 +150,7 @@ class KworkParser {
 
         parsedProjects.push(projectData);
       } catch (error) {
-        console.error("❌ Ошибка парсинга проекта:", error);
+        console.error("❌ Ошибка парсинга проекта:", error.message);
       }
     }
 
@@ -92,23 +158,32 @@ class KworkParser {
   }
 
   async getNewProjects() {
-    const allProjects = await this.getProjects();
-    const newProjects = [];
+    try {
+      const allProjects = await this.getProjects();
+      const newProjects = [];
 
-    for (const project of allProjects) {
-      if (!processedProjects.has(project.id)) {
-        newProjects.push(project);
-        processedProjects.add(project.id);
+      for (const project of allProjects) {
+        if (project.id && !processedProjects.has(project.id)) {
+          newProjects.push(project);
+          processedProjects.add(project.id);
+        }
       }
-    }
 
-    // Очистка старых проектов
-    if (processedProjects.size > 1000) {
-      const array = Array.from(processedProjects);
-      processedProjects = new Set(array.slice(-500));
-    }
+      // Очистка старых проектов
+      if (processedProjects.size > 1000) {
+        const array = Array.from(processedProjects);
+        processedProjects = new Set(array.slice(-500));
+      }
 
-    return newProjects;
+      return newProjects;
+    } catch (error) {
+      console.error("❌ Ошибка в getNewProjects:", error.message);
+      return [];
+    }
+  }
+
+  delay(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
 
@@ -139,8 +214,10 @@ async function sendProjectNotification(chatId, project) {
     });
 
     console.log(`✅ Уведомление отправлено: ${project.title}`);
+    return true;
   } catch (error) {
-    console.error("❌ Ошибка отправки уведомления:", error);
+    console.error("❌ Ошибка отправки уведомления:", error.message);
+    return false;
   }
 }
 
@@ -160,47 +237,54 @@ bot.command("monitor", async (ctx) => {
   isMonitoring = true;
   const chatId = ctx.chat.id;
 
-  // Запуск мониторинга каждые 2 минуты
-  monitoringInterval = setInterval(async () => {
-    try {
-      if (!isMonitoring) return;
+  ctx.reply("🔍 Мониторинг запущен! Проверка каждые 3 минуты.");
+  console.log("✅ Мониторинг запущен");
 
+  // Функция для выполнения проверки
+  const performCheck = async () => {
+    if (!isMonitoring) return;
+
+    try {
       console.log("🔍 Автоматическая проверка проектов...");
       const newProjects = await kworkParser.getNewProjects();
       if (newProjects.length > 0) {
         console.log(`🎉 Найдено новых проектов: ${newProjects.length}`);
+        let sentCount = 0;
+
         for (const project of newProjects) {
-          await sendProjectNotification(chatId, project);
-          // Задержка между отправками
-          await new Promise((resolve) => setTimeout(resolve, 1000));
+          if (!isMonitoring) break; // Остановка если мониторинг выключен
+
+          const success = await sendProjectNotification(chatId, project);
+          if (success) {
+            sentCount++;
+            // Задержка между отправками
+            await new Promise((resolve) => setTimeout(resolve, 1500));
+          }
         }
+
+        if (sentCount > 0) {
+          await bot.telegram.sendMessage(
+            chatId,
+            `📊 Проверка завершена. Отправлено уведомлений: ${sentCount}`,
+          );
+        }
+      } else {
+        console.log("ℹ️ Новых проектов нет");
       }
     } catch (error) {
-      console.error("❌ Ошибка мониторинга:", error);
+      console.error("❌ Ошибка мониторинга:", error.message);
+      await bot.telegram.sendMessage(
+        chatId,
+        "❌ Произошла ошибка при проверке проектов. Мониторинг продолжается.",
+      );
     }
-  }, 120000); // 2 минуты
+  };
+
+  // Запуск мониторинга каждые 3 минуты
+  monitoringInterval = setInterval(performCheck, 180000);
 
   // Первая проверка сразу
-  try {
-    ctx.reply(
-      "🔍 Мониторинг запущен! Проверка каждые 2 минуты. Первая проверка...",
-    );
-    const newProjects = await kworkParser.getNewProjects();
-    if (newProjects.length > 0) {
-      ctx.reply(`🎉 Найдено новых проектов: ${newProjects.length}`);
-      for (const project of newProjects) {
-        await sendProjectNotification(chatId, project);
-        await new Promise((resolve) => setTimeout(resolve, 1000));
-      }
-    } else {
-      ctx.reply("ℹ️ Новых проектов нет");
-    }
-  } catch (error) {
-    ctx.reply("❌ Ошибка при первой проверке");
-    console.error("❌ Ошибка первой проверки:", error);
-  }
-
-  console.log("✅ Мониторинг запущен");
+  setTimeout(performCheck, 5000);
 });
 
 bot.command("stop", (ctx) => {
@@ -223,16 +307,27 @@ bot.command("check", async (ctx) => {
     const newProjects = await kworkParser.getNewProjects();
     if (newProjects.length > 0) {
       ctx.reply(`🎉 Найдено новых проектов: ${newProjects.length}`);
+      let sentCount = 0;
+
       for (const project of newProjects) {
-        await sendProjectNotification(chatId, project);
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+        const success = await sendProjectNotification(chatId, project);
+        if (success) {
+          sentCount++;
+          await new Promise((resolve) => setTimeout(resolve, 1500));
+        }
+      }
+
+      if (sentCount < newProjects.length) {
+        ctx.reply(
+          `📊 Удалось отправить ${sentCount} из ${newProjects.length} уведомлений`,
+        );
       }
     } else {
       ctx.reply("ℹ️ Новых проектов нет");
     }
   } catch (error) {
     ctx.reply("❌ Ошибка при проверке проектов");
-    console.error("❌ Ошибка проверки:", error);
+    console.error("❌ Ошибка проверки:", error.message);
   }
 });
 
@@ -243,52 +338,28 @@ bot.command("status", (ctx) => {
   );
 });
 
+bot.command("ping", (ctx) => {
+  ctx.reply("🏓 Pong! Бот работает нормально");
+});
+
 // Обработка ошибок бота
 bot.catch((err, ctx) => {
-  console.error(`❌ Ошибка бота для ${ctx.updateType}:`, err);
+  console.error(`❌ Ошибка бота для ${ctx.updateType}:`, err.message);
 });
 
 // Запуск бота
 async function startBot() {
   try {
-    // Для Vercel используем вебхуки, для локального - long polling
     if (process.env.VERCEL) {
       console.log("🚀 Бот запущен в режиме вебхука на Vercel");
-      // Vercel будет обрабатывать вебхуки через экспортированную функцию
     } else {
       console.log("🚀 Бот запущен в режиме long polling");
       await bot.launch();
-
-      // Автозапуск мониторинга при старте в локальном режиме
-      if (process.env.TELEGRAM_CHAT_ID) {
-        console.log("🔍 Автозапуск мониторинга в локальном режиме...");
-        isMonitoring = true;
-        monitoringInterval = setInterval(async () => {
-          try {
-            if (!isMonitoring) return;
-
-            console.log("🔍 Автоматическая проверка проектов...");
-            const newProjects = await kworkParser.getNewProjects();
-            if (newProjects.length > 0) {
-              console.log(`🎉 Найдено новых проектов: ${newProjects.length}`);
-              for (const project of newProjects) {
-                await sendProjectNotification(
-                  process.env.TELEGRAM_CHAT_ID,
-                  project,
-                );
-                await new Promise((resolve) => setTimeout(resolve, 1000));
-              }
-            }
-          } catch (error) {
-            console.error("❌ Ошибка мониторинга:", error);
-          }
-        }, 120000);
-      }
     }
 
     console.log("✅ Бот успешно запущен");
   } catch (error) {
-    console.error("❌ Ошибка запуска бота:", error);
+    console.error("❌ Ошибка запуска бота:", error.message);
     process.exit(1);
   }
 }
@@ -300,11 +371,10 @@ module.exports = async (req, res) => {
       await bot.handleUpdate(req.body);
       res.status(200).send("OK");
     } catch (error) {
-      console.error("❌ Ошибка обработки вебхука:", error);
+      console.error("❌ Ошибка обработки вебхука:", error.message);
       res.status(500).send("Error");
     }
   } else {
-    // Для GET запросов - информационная страница
     res.status(200).json({
       status: "Bot is running",
       monitoring: isMonitoring ? "active" : "inactive",
@@ -323,6 +393,7 @@ if (!process.env.VERCEL) {
 process.once("SIGINT", () => {
   if (monitoringInterval) {
     clearInterval(monitoringInterval);
+    isMonitoring = false;
   }
   bot.stop("SIGINT");
   console.log("🛑 Бот остановлен");
@@ -331,6 +402,7 @@ process.once("SIGINT", () => {
 process.once("SIGTERM", () => {
   if (monitoringInterval) {
     clearInterval(monitoringInterval);
+    isMonitoring = false;
   }
   bot.stop("SIGTERM");
   console.log("🛑 Бот остановлен");
