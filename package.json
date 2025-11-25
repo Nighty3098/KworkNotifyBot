@@ -1,6 +1,6 @@
 {
   "name": "kwork-telegram-bot",
-  "version": "1.0.0",
+  "version": "1.2.0",
   "description": "Telegram bot for Kwork projects monitoring",
   "main": "api/bot.js",
   "scripts": {

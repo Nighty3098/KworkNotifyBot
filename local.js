@@ -3,7 +3,6 @@ require("dotenv").config();
 console.log("🚀 Запуск локального монитора Kwork...");
 console.log("🤖 Инициализация Telegram бота...");
 
-// Проверка переменных окружения
 if (!process.env.TELEGRAM_BOT_TOKEN) {
   console.error("❌ TELEGRAM_BOT_TOKEN не установлен в .env файле");
   process.exit(1);
@@ -15,7 +14,6 @@ if (!process.env.TELEGRAM_CHAT_ID) {
   );
 }
 
-// Импортируем основной файл
 require("./api/bot.js");
 
 console.log("✅ Бот запущен в локальном режиме");

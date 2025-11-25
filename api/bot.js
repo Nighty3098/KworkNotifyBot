@@ -1,8 +1,6 @@
 const { Telegraf } = require("telegraf");
 const axios = require("axios");
-const cheerio = require("cheerio");
 
-// Глобальные переменные для хранения состояния
 let processedProjects = new Set();
 let monitoringInterval = null;
 let isMonitoring = false;
@@ -13,7 +11,7 @@ class KworkParser {
     this.retryDelay = 2000;
 
     this.axiosInstance = axios.create({
-      timeout: 30000, // Увеличили таймаут до 30 секунд
+      timeout: 30000, // 30 секунд
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
@@ -44,14 +42,12 @@ class KworkParser {
 
         const html = response.data;
 
-        // Ищем данные разными способами
         const projects = this.extractProjectsFromHtml(html);
         if (projects && projects.length > 0) {
           console.log(`📊 Найдено проектов: ${projects.length}`);
           return projects;
         }
 
-        // Если проекты не найдены, пробуем еще раз
         if (attempt < this.retryCount) {
           console.log(
             `⏳ Проекты не найдены, повтор через ${this.retryDelay / 1000} сек...`,
@@ -76,7 +72,6 @@ class KworkParser {
   }
 
   extractProjectsFromHtml(html) {
-    // Способ 1: Ищем в window.stateData
     const stateDataMatch = html.match(/window\.stateData\s*=\s*({.*?});/s);
     if (stateDataMatch) {
       try {
@@ -89,13 +84,11 @@ class KworkParser {
       }
     }
 
-    // Способ 2: Ищем в других местах
     const scriptMatches = html.match(/<script[^>]*>([\s\S]*?)<\/script>/gi);
     if (scriptMatches) {
       for (const script of scriptMatches) {
         if (script.includes("wants") && script.includes("projects")) {
           try {
-            // Пробуем найти JSON в скрипте
             const jsonMatch = script.match(/{[\s\S]*"wants"[\s\S]*}/);
             if (jsonMatch) {
               const data = JSON.parse(jsonMatch[0]);
@@ -103,9 +96,7 @@ class KworkParser {
                 return this.parseProjects(data.wants);
               }
             }
-          } catch (error) {
-            // Игнорируем ошибки парсинга
-          }
+          } catch (error) {}
         }
       }
     }
@@ -169,7 +160,6 @@ class KworkParser {
         }
       }
 
-      // Очистка старых проектов
       if (processedProjects.size > 1000) {
         const array = Array.from(processedProjects);
         processedProjects = new Set(array.slice(-500));
@@ -187,11 +177,9 @@ class KworkParser {
   }
 }
 
-// Инициализация бота и парсера
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 const kworkParser = new KworkParser();
 
-// Функция отправки уведомления о проекте
 async function sendProjectNotification(chatId, project) {
   try {
     const message = `
@@ -221,7 +209,6 @@ async function sendProjectNotification(chatId, project) {
   }
 }
 
-// Команды бота
 bot.start((ctx) => {
   ctx.reply(
     "🚀 Бот для мониторинга Kwork запущен!\n\nКоманды:\n/monitor - запустить мониторинг\n/stop - остановить мониторинг\n/check - проверить сейчас\n/status - статус",
@@ -240,7 +227,6 @@ bot.command("monitor", async (ctx) => {
   ctx.reply("🔍 Мониторинг запущен! Проверка каждые 3 минуты.");
   console.log("✅ Мониторинг запущен");
 
-  // Функция для выполнения проверки
   const performCheck = async () => {
     if (!isMonitoring) return;
 
@@ -252,12 +238,11 @@ bot.command("monitor", async (ctx) => {
         let sentCount = 0;
 
         for (const project of newProjects) {
-          if (!isMonitoring) break; // Остановка если мониторинг выключен
+          if (!isMonitoring) break;
 
           const success = await sendProjectNotification(chatId, project);
           if (success) {
             sentCount++;
-            // Задержка между отправками
             await new Promise((resolve) => setTimeout(resolve, 1500));
           }
         }
@@ -280,10 +265,9 @@ bot.command("monitor", async (ctx) => {
     }
   };
 
-  // Запуск мониторинга каждые 3 минуты
-  monitoringInterval = setInterval(performCheck, 180000);
+  // Запуск мониторинга каждые 25 минут
+  monitoringInterval = setInterval(performCheck, 1000 * 60 * 25);
 
-  // Первая проверка сразу
   setTimeout(performCheck, 5000);
 });
 
@@ -342,12 +326,10 @@ bot.command("ping", (ctx) => {
   ctx.reply("🏓 Pong! Бот работает нормально");
 });
 
-// Обработка ошибок бота
 bot.catch((err, ctx) => {
   console.error(`❌ Ошибка бота для ${ctx.updateType}:`, err.message);
 });
 
-// Запуск бота
 async function startBot() {
   try {
     if (process.env.VERCEL) {
@@ -364,7 +346,6 @@ async function startBot() {
   }
 }
 
-// Экспорт для Vercel
 module.exports = async (req, res) => {
   if (req.method === "POST") {
     try {
@@ -384,12 +365,10 @@ module.exports = async (req, res) => {
   }
 };
 
-// Автозапуск при старте (только в локальном режиме)
 if (!process.env.VERCEL) {
   startBot();
 }
 
-// Graceful shutdown
 process.once("SIGINT", () => {
   if (monitoringInterval) {
     clearInterval(monitoringInterval);
